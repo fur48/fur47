@@ -1,0 +1,72 @@
+2025-02-15T06:14:39.981Z info index.js: initializing repository for model  Setting 
+2025-02-15T06:14:39.983Z info index.js: Disk Storage has been chosen as the default repository for: Setting 
+2025-02-15T06:14:39.984Z info index.js: data/Setting.json doesn't exist, fresh file will be created! 
+2025-02-15T06:14:40.007Z info index.js: Server is listening on port  3000 
+2025-02-15T06:14:40.011Z info index.js: initializing repository for model  User 
+2025-02-15T06:14:40.012Z info index.js: Disk Storage has been chosen as the default repository for: User 
+2025-02-15T06:14:40.013Z info index.js: data/User.json doesn't exist, fresh file will be created! 
+2025-02-15T06:14:40.014Z info index.js: creating admin user! 
+2025-02-15T06:15:43.929Z info index.js: initializing repository for model  Setting 
+2025-02-15T06:15:43.930Z info index.js: Disk Storage has been chosen as the default repository for: Setting 
+2025-02-15T06:15:43.931Z info index.js: data/Setting.json doesn't exist, fresh file will be created! 
+2025-02-15T06:15:43.953Z info index.js: Server is listening on port  3000 
+2025-02-15T06:15:43.957Z info index.js: initializing repository for model  User 
+2025-02-15T06:15:43.957Z info index.js: Disk Storage has been chosen as the default repository for: User 
+2025-02-15T06:15:43.958Z info index.js: data/User.json doesn't exist, fresh file will be created! 
+2025-02-15T06:15:43.958Z info index.js: creating admin user! 
+2025-04-07T02:36:59.955Z info index.js: initializing repository for model  Setting 
+2025-04-07T02:36:59.961Z info index.js: Disk Storage has been chosen as the default repository for: Setting 
+2025-04-07T02:36:59.964Z info index.js: data/Setting.json doesn't exist, fresh file will be created! 
+2025-04-07T02:37:00.006Z info index.js: Server is listening on port  3003 
+2025-04-07T02:37:00.010Z info index.js: initializing repository for model  User 
+2025-04-07T02:37:00.010Z info index.js: Disk Storage has been chosen as the default repository for: User 
+2025-04-07T02:37:00.012Z info index.js: data/User.json doesn't exist, fresh file will be created! 
+2025-04-07T02:37:00.013Z info index.js: creating admin user! 
+2025-04-07T02:38:09.391Z info index.js: anonymous user created new user with User {
+  id: 2,
+  username: 'test',
+  password: '$2b$10$X.b7.1Hqt130bsXuSz3VvOqInClBiAKnm8uhn.1VQnem6RQ/KjB02',
+  active: false,
+  langPref: 'en',
+  isAdmin: false,
+  createdDate: 2025-04-07T02:38:09.390Z,
+  lastLoginDate: undefined,
+  isSuperAdmin: false,
+  soundPref: undefined
+} 
+2025-04-07T02:52:03.626Z info index.js: anonymous user created new user with User {
+  id: 3,
+  username: 'test1',
+  password: '$2b$10$s/Jxt4ccHTGKYxT9WGLJru4vJpgws5w5z3AM.ztg.S63Mic56FYhe',
+  active: false,
+  langPref: 'en',
+  isAdmin: false,
+  createdDate: 2025-04-07T02:52:03.626Z,
+  lastLoginDate: undefined,
+  isSuperAdmin: false,
+  soundPref: undefined
+} 
+2025-04-07T02:52:37.134Z info index.js: anonymous user created new user with User {
+  id: 4,
+  username: 'test2',
+  password: '$2b$10$.dqTeCPGHERZpg5pa7B1Ceiajvj/KDaNpm8SbiJIbvCScv.BkLa36',
+  active: false,
+  langPref: 'en',
+  isAdmin: false,
+  createdDate: 2025-04-07T02:52:37.134Z,
+  lastLoginDate: undefined,
+  isSuperAdmin: false,
+  soundPref: undefined
+} 
+2025-04-07T02:53:17.754Z info index.js: anonymous user created new user with User {
+  id: 5,
+  username: 'test3',
+  password: '$2b$10$KAN/hjsMhHVjeTL3zki2n.DjLpZP2S0JNAHRm76lYXBcc2mozpahu',
+  active: false,
+  langPref: 'en',
+  isAdmin: false,
+  createdDate: 2025-04-07T02:53:17.754Z,
+  lastLoginDate: undefined,
+  isSuperAdmin: false,
+  soundPref: undefined
+} 
