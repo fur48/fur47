@@ -28,9 +28,11 @@
   let loggedIn = false;
   let me = null;
   let shownFor = null;      // loginAt already shown during this page-load
-  let sock = null;
+  let fsNoticeWatchHooked = false; // set once hookSocket() runs (polling mode)
 
   const curLang = () => (localStorage.getItem("langPref") === "en" ? "en" : "bn");
+  /** tiny setTimeout helper used for retries/toasts */
+  const t = (ms, fn) => setTimeout(fn, ms);
   const STRINGS = {
     en: {
       ok: "Understood",
@@ -140,7 +142,7 @@
         <button type="button" class="bca-fsok"></button>
       </div>`;
     const okBtn = overlay.querySelector(".bca-fsok");
-    okBtn.textContent = okLabel || S().okDefault;
+    okBtn.textContent = okLabel || S().ok;
     okBtn.addEventListener("click", closeOverlay);
     const inner = overlay.querySelector(".bca-fsinner");
     // admin-authored raw html/css/js — the SAME trust decision as the
@@ -154,10 +156,17 @@
     const bar = overlay.querySelector(".bca-fsbar");
     const tail = document.createElement("div");
     tail.className = "bca-fstail";
+    // inline (owner request): the button flows on the SAME line where the
+    // notice text ends — not on its own line below. Works because the
+    // notice is authored as inline text + <br> lines; if the notice ends
+    // with a block element (div/p), the button naturally starts after it.
+    tail.style.display = "inline";
+    tail.style.marginLeft = "10px";
     tail.appendChild(okBtn);
     inner.appendChild(tail);
     host().appendChild(overlay);
     document.body.classList.add("bca-fslock");
+    hookSocket(); // polling-mode notice watch (no websocket — one shared addon surface)
     requestAnimationFrame(() => {
       if (content.scrollHeight > content.clientHeight + 40) bar.hidden = false;
     });
@@ -195,28 +204,30 @@
     showOverlay(fsNoticeCache.notice, fsNoticeCache.okLabel);
   }
 
-  // ---------- socket (live refresh while the overlay is open) ----------
-  function loadSocketClient() {
-    if (window.io) return Promise.resolve(window.io);
-    return new Promise((resolve) => {
-      const sc = document.createElement("script");
-      sc.src = "/socket.io/socket.io.js";
-      sc.onload = () => resolve(window.io || null);
-      sc.onerror = () => resolve(null);
-      document.head.appendChild(sc);
-    });
-  }
+  // ---------- notice change watch (lightweight /users/me loginAt polling) ----------
+  // The addon layer now shares ONE connection surface: no per-addon websocket
+  // (owner request). A changed loginAt = a new login → refetch the notice and
+  // (if an overlay is open) refresh it. For mid-session admin edits the
+  // evaluate() loop refetches every ~5s ONLY while an overlay is actually on
+  // screen — ~12 tiny JSON calls/min on one page per admin-edit session,
+  // zero when nobody is reading the notice.
+  function loadSocketClient() { return Promise.resolve(null); } // legacy hook — sockets retired
   async function hookSocket() {
-    const IO = await loadSocketClient();
-    if (!IO || sock) return;
-    try {
-      sock = IO({ transports: ["websocket", "polling"], reconnection: true });
-      sock.on("updateFsNotice", async () => {
-        fsNoticeCache = null;
-        await refetchNotice();
-        if (host().querySelector(".bca-fsoverlay") && fsNoticeCache) showOverlay(fsNoticeCache.notice);
-      });
-    } catch { /* live refresh is optional */ }
+    // The addon layer shares ONE connection surface now (owner request:
+    // no per-addon websocket). Notice refresh = lightweight /users/me
+    // loginAt-polling (see evaluate below); mid-session admin edits are
+    // picked up by the overlay-open refetch loop.
+    fsNoticeWatchHooked = true;
+  }
+
+  // ---------- tiny local toast (same look as the main addon's .bca-toast,
+  // which lives in addon.js and must not be reached from here) ----------
+  function showToast(message, isErr = false) {
+    const el = document.createElement("div");
+    el.className = "bca-toast" + (isErr ? " err" : "");
+    el.textContent = message;
+    host().appendChild(el);
+    t(3200, () => el.remove());
   }
 
   // ---------- editor (the /admin card) ----------
@@ -246,7 +257,7 @@
     box.querySelector(".bca-fshint2").textContent = s.editorHint;
     const okLabelInput = box.querySelector(".bca-fsoklabel");
     box.querySelector(".bca-fsoklabel-label").textContent = s.okLabelLabel;
-    okLabelInput.placeholder = s.okDefault;
+    okLabelInput.placeholder = s.ok;
     box.querySelector(".bca-fsmodelabel").textContent = s.modeLabel;
     box.querySelector(".bca-fsmodegist").textContent = s.modeGist;
     box.querySelector(".bca-fsmodememory").textContent = s.modeMemory;
@@ -309,7 +320,7 @@
     modeRadios().forEach((radio) =>
       radio.addEventListener("change", async () => {
         const okNow = await saveNow(undefined, undefined, radio.value);
-        if (okNow) toast(s.modeSaved);
+        if (okNow) showToast(s.modeSaved);
       })
     );
 
@@ -428,6 +439,7 @@
   // ---------- session poller (1.2 s — mirrors the main addon) ----------
   let lastLang = curLang();
   let lastLoginAt = null;
+  let lastOverlayFetch = 0; // throttle for the overlay-open notice refetch
   async function evaluate() {
     try {
       const res = await fetch("/api/users/me", { credentials: "same-origin" });
@@ -454,6 +466,20 @@
       document.body.classList.toggle("bca-fs-dark", appIsDark());
       ensureAdminCard();
       ensureScrollGuard();
+      // mid-session admin edits: while an overlay is on screen, refetch the
+      // notice every ~5s (lightweight JSON; zero cost when nothing is shown)
+      if (fsSupported && host().querySelector(".bca-fsoverlay")) {
+        if (lastOverlayFetch === 0 || Date.now() - lastOverlayFetch >= 5000) {
+          lastOverlayFetch = Date.now();
+          const had = fsNoticeCache;
+          await refetchNotice();
+          if (fsNoticeCache && fsNoticeCache.updatedAt !== (had && had.updatedAt)) {
+            showOverlay(fsNoticeCache.notice, fsNoticeCache.okLabel);
+          }
+        }
+      } else {
+        lastOverlayFetch = 0;
+      }
       if (curLang() !== lastLang) {
         lastLang = curLang();
         const okBtn = host().querySelector(".bca-fsok");
@@ -468,5 +494,4 @@
 
   setInterval(evaluate, 1200);
   evaluate();
-  hookSocket();
 })();
