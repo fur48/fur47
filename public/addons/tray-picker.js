@@ -101,7 +101,7 @@
         reactions[item.emoji].usernames.push(item.username);
       item.reactions = reactions;
       if (item.via === "socket") {
-        const sock = await Promise.race([reactionSocket(), new Promise((r) => setTimeout(() => r(null), 2500))]);
+        const sock = await Promise.race([reactionSocket(), new Promise((r) => setTimeout(() => r(null), 1000))]);
         if (!sock?.connected) throw { retryable: true };
         const ok = await new Promise((res) => {
           let done = false;
@@ -260,7 +260,7 @@
     // ack. Same pipe, same speed; no REST round-trip + broadcast-frame lag.
     const sock = await Promise.race([
       reactionSocket(),
-      new Promise((r) => setTimeout(() => r(null), 2000)),
+      new Promise((r) => setTimeout(() => r(null), 1000)), // 1s max: never hold a click for a handshake
     ]);
     if (sock?.connected) {
       const ok = await new Promise((resolve) => {
