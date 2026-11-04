@@ -1,22 +1,18 @@
 /* Login autopilot — standalone addon for "Our Discussion Room".
-   v4 (owner-reported regression fix): v3 reloaded whenever a password input
-   EXISTED in the DOM — but the app keeps the login form (hidden) mounted on
-   the chat page too, so it reloaded in a LOOP after entering the chat:
-   tab loading-bar spun forever, and every reload re-handshaked the app's
-   socket (which made even the "1" default-emoji reactions feel slow).
-   v4 rules:
-   - "visible" password field only (rect + offsetParent — hidden DOM shells
-     no longer count),
-   - reload ONLY if: visible login form AND no chat content AND no addon
-     modal AND ≥15 s since the last auto-reload (loop impossible),
-   - as soon as chat content exists → spinner off, fully passive,
-   - spinner hard-cap 90 s — it can never trap the user.
+   v5 (owner report: "খালি ঘুরতেই থাকে, অনেকবার reload দিলে পড়ে"): v4 could
+   still loop — after a cold enter the chat page has NO message nodes for the
+   first seconds, so "no chat content" was true and it reloaded again. v5:
+   the auto-reload happens AT MOST ONCE EVER (localStorage counter) — after
+   that the app always lands on its own; the spinner is just feedback while
+   the login POST/wake-up runs, hard-capped at 90 s.
+   Also: visible-password only (hidden DOM shells never count), no reload
+   while mustChangePassword or an addon modal is up, fully passive in chat.
 */
 (() => {
   "use strict";
   if (window.__bcaLoginAutopilot) return;
   window.__bcaLoginAutopilot = true;
-  console.log("[bca] login-autopilot v4 loaded");
+  console.log("[bca] login-autopilot v5 loaded");
 
   // ---------- spinner (text-free, hard-capped) ----------
   let spin = null;
@@ -64,7 +60,6 @@
   // ---------- probe loop ----------
   let lastOk = false;
   let probing = false;
-  const RELOAD_COOLDOWN_MS = 15000;
   async function probe() {
     if (probing) return;
     probing = true;
@@ -79,12 +74,14 @@
       if (lastOk) return; // steady logged-in on the login screen? still wait quietly
       lastOk = true; // fresh 401→200 = login just landed
       setTimeout(() => {
-        // reload ONCE only if genuinely stuck on a visible login form with no
-        // chat content, no addon modal, and outside the cooldown window
-        const last = Number(sessionStorage.getItem("bcaAutoRel") || 0);
-        const cooldownOk = Date.now() - last > RELOAD_COOLDOWN_MS;
-        if (visiblePassword() && !chatVisible() && !document.querySelector(".bca-overlay") && cooldownOk) {
-          try { sessionStorage.setItem("bcaAutoRel", String(Date.now())); } catch { /* private mode */ }
+        // v5: reload AT MOST ONCE EVER (localStorage counter). The chat page
+        // keeps messages sparse for the first seconds after a cold enter, so
+        // the old "no chat content" check could loop. Now: one reload total,
+        // then never again — the app always lands on its own.
+        let reloads = 0;
+        try { reloads = Number(localStorage.getItem("bcaAutoRelN") || 0); } catch { /* private mode */ }
+        if (visiblePassword() && !document.querySelector(".bca-overlay") && reloads < 1) {
+          try { localStorage.setItem("bcaAutoRelN", String(reloads + 1)); } catch { /* private mode */ }
           location.reload();
         } else {
           spinHide();

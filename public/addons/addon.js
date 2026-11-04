@@ -1903,6 +1903,10 @@
 
   /** fallback when the navbar isn't available: floating button */
   function addFab() {
+    // chat page only: never on /login, /register, /admin (owner screenshot —
+    // the FAB floated over the bare login form; the navbar isn't there yet
+    // but the page is clearly not the chat)
+    if (!document.querySelector('div[id^="message-"]')) return;
     if (root().querySelector(".bca-fab")) return;
     const s = S();
     const fab = document.createElement("button");
