@@ -1,34 +1,28 @@
 /* Login autopilot — standalone addon for "Our Discussion Room".
-   Owner requests (in order):
-   1) "লগইন করার পর অনেকক্ষণ বসে থাকে (401)" → the login POST hangs while the
-      Render free-tier server wakes (~30–60 s). This addon cannot make the
-      sleeping server faster, but it removes the user-facing symptoms.
-   2) "লোডিং ঘুরতে থাকবে" → a small spinner overlays the login form from the
-      moment the login POST starts until the user is really in. The reload
-      keeps it spinning (the page reloads fast from cache), so there is never
-      a bare stuck form.
-   3) "এই লেখাগুলো বাদ" → completely text-free: a minimal spinner, nothing else.
-
-   How it works (plain HTTP, no websockets — one-surface rule):
-   - Every 1.2 s it probes /api/users/me. Logged out → keep waiting (and the
-     probe itself helps wake the sleeping server).
-   - It watches for a login attempt (a click on a login/submit button, or
-     Enter in a password field) → spinner ON immediately (feels instant).
-   - The MOMENT the probe returns 200 with a username (401→200 = the login
-     landed): spinner keeps spinning and, if the login form is still visible
-     after a short beat, it reloads ONCE — the app enters the chat because
-     the session cookie is already set. While mustChangePassword or an addon
-     modal is up, the spinner stops and it stands down.
+   v4 (owner-reported regression fix): v3 reloaded whenever a password input
+   EXISTED in the DOM — but the app keeps the login form (hidden) mounted on
+   the chat page too, so it reloaded in a LOOP after entering the chat:
+   tab loading-bar spun forever, and every reload re-handshaked the app's
+   socket (which made even the "1" default-emoji reactions feel slow).
+   v4 rules:
+   - "visible" password field only (rect + offsetParent — hidden DOM shells
+     no longer count),
+   - reload ONLY if: visible login form AND no chat content AND no addon
+     modal AND ≥15 s since the last auto-reload (loop impossible),
+   - as soon as chat content exists → spinner off, fully passive,
+   - spinner hard-cap 90 s — it can never trap the user.
 */
 (() => {
   "use strict";
   if (window.__bcaLoginAutopilot) return;
   window.__bcaLoginAutopilot = true;
-  console.log("[bca] login-autopilot v3 loaded");
+  console.log("[bca] login-autopilot v4 loaded");
 
-  // ---------- spinner (text-free, tiny, self-managed) ----------
+  // ---------- spinner (text-free, hard-capped) ----------
   let spin = null;
+  let spinShownAt = 0;
   function spinShow() {
+    spinShownAt = Date.now();
     if (spin) { spin.style.display = "flex"; return; }
     spin = document.createElement("div");
     spin.id = "bca-login-spin";
@@ -43,51 +37,66 @@
     const st = document.createElement("style");
     st.textContent = "@keyframes bca-spin-rot{to{transform:rotate(360deg)}}";
     document.head.appendChild(st);
-    document.body.appendChild(spin);
+    (document.body || document.documentElement).appendChild(spin);
   }
   function spinHide() { if (spin) spin.style.display = "none"; }
 
-  // ---------- login-attempt detection (spinner ON instantly) ----------
-  let attemptSeen = false;
-  function markAttempt() {
-    if (attemptSeen) return;
-    const pw = document.querySelector('input[type="password"]');
-    if (!pw) return; // not on a credentials screen
-    attemptSeen = true;
-    spinShow();
+  // ---------- page-state helpers ----------
+  function visiblePassword() {
+    for (const el of document.querySelectorAll('input[type="password"]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && el.offsetParent !== null) return true;
+    }
+    return false; // hidden/absent shells don't count (v4)
   }
+  function chatVisible() {
+    return !!document.querySelector('div[id^="message-"]');
+  }
+
+  // ---------- login-attempt detection (spinner ON instantly) ----------
   document.addEventListener("click", (e) => {
-    if (e.target.closest?.('button[type="submit"], input[type="submit"], .btn-primary')) markAttempt();
+    if (visiblePassword() && e.target.closest?.('button[type="submit"], input[type="submit"], .btn-primary')) spinShow();
   }, true);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && e.target.matches?.('input[type="password"], input[name*="user" i]')) markAttempt();
+    if (e.key === "Enter" && e.target.matches?.('input[type="password"]') && visiblePassword()) spinShow();
   }, true);
 
   // ---------- probe loop ----------
   let lastOk = false;
   let probing = false;
+  const RELOAD_COOLDOWN_MS = 15000;
   async function probe() {
     if (probing) return;
     probing = true;
     try {
       const res = await fetch("/api/users/me", { credentials: "same-origin" });
-      if (!res.ok) { lastOk = false; return; } // still waiting — spinner keeps spinning
+      if (!res.ok) { lastOk = false; return; } // waiting — spinner keeps spinning
       const me = await res.json().catch(() => null);
       if (!me?.username) { lastOk = false; return; }
-      if (me.mustChangePassword) { attemptSeen = false; spinHide(); return; }
-      if (lastOk) { spinHide(); return; } // steady logged-in
+      if (me.mustChangePassword) { spinHide(); return; } // forced-change modal owns the screen
+      // in the chat already (or no visible login form) → nothing to do, ever
+      if (chatVisible() || !visiblePassword()) { lastOk = true; spinHide(); return; }
+      if (lastOk) return; // steady logged-in on the login screen? still wait quietly
       lastOk = true; // fresh 401→200 = login just landed
-      // give the SPA a beat to navigate by itself; if the form is still
-      // there, enter for the user (cookie is set — reload lands in chat)
       setTimeout(() => {
-        const pwVisible = !!document.querySelector('input[type="password"]');
-        const addonModal = !!document.querySelector(".bca-overlay");
-        if (pwVisible && !addonModal) location.reload(); // spinner survives the reload
-        else { attemptSeen = false; spinHide(); }
-      }, 1800);
+        // reload ONCE only if genuinely stuck on a visible login form with no
+        // chat content, no addon modal, and outside the cooldown window
+        const last = Number(sessionStorage.getItem("bcaAutoRel") || 0);
+        const cooldownOk = Date.now() - last > RELOAD_COOLDOWN_MS;
+        if (visiblePassword() && !chatVisible() && !document.querySelector(".bca-overlay") && cooldownOk) {
+          try { sessionStorage.setItem("bcaAutoRel", String(Date.now())); } catch { /* private mode */ }
+          location.reload();
+        } else {
+          spinHide();
+        }
+      }, 1500);
     } catch { /* transient — next tick retries */ }
     finally { probing = false; }
   }
   setInterval(probe, 1200);
   probe();
+  // safety cap: the spinner can never spin for more than 90 s
+  setInterval(() => {
+    if (spin && spin.style.display !== "none" && Date.now() - spinShownAt > 90000) spinHide();
+  }, 5000);
 })();
