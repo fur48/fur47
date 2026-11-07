@@ -101,8 +101,8 @@
       tabUsers: "Users",
       tabAttendance: "Attendance counter",
       attViewLabel: "Who may open the attendance page?",
-      attLinkLabel: "Open the attendance counter page (opens in a new tab)",
-      attOpenPage: "Attendance counter",
+      attLinkLabel: "Attendance link",
+      attOpenPage: "Attendance & notepad",
       attEditorLabel: "HTML code of the page",
       attNoteLabel: "Shared note (visible on the attendance page)",
       attNoteSave: "Save note",
@@ -210,8 +210,8 @@
       tabUsers: "ইউজার",
       tabAttendance: "হাজিরা কাউন্টার",
       attViewLabel: "হাজিরা পেজ কারা খুলতে পারবে?",
-      attLinkLabel: "হাজিরা কাউন্টার পেজ খুলুন (নতুন ট্যাবে খুলবে)",
-      attOpenPage: "হাজিরা কাউন্টার",
+      attLinkLabel: "হাজিরা লিংক",
+      attOpenPage: "হাজিরা ও নোটপ্যাড",
       attEditorLabel: "পেজের HTML কোড",
       attNoteLabel: "শেয়ার্ড নোট (হাজিরা পেজে দেখা যাবে)",
       attNoteSave: "নোট সেভ করুন",
@@ -269,13 +269,11 @@
   }
 
   async function fetchMe() {
-    try {
-      const res = await fetch("/api/users/me", { credentials: "same-origin" });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
+    // session state from the shared hub (ui-fixes.js owns the single
+    // /api/users/me poll — owner request: এক কল, সবাই শোনে)
+    const sess = window.__bcaSession;
+    if (sess?.loggedIn && sess.me) return sess.me;
+    return null;
   }
 
   // ---------- feature visibility (admin-configurable) ----------
@@ -828,7 +826,16 @@
     renderChips();
     loadAccounts();
 
-    return { el: box, values: () => [...state], onChange: (fn) => handlers.push(fn) };
+    return {
+      el: box,
+      values: () => [...state],
+      onChange: (fn) => handlers.push(fn),
+      setValues: (names) => {
+        for (const name of names) state.add(String(name).trim());
+        renderChips();
+        loadAccounts(); // refresh the checkbox list too (kept in userPicker scope)
+      },
+    };
   }
 
   async function showAdminPanel() {
@@ -1079,14 +1086,6 @@
         </div>
         <div class="bca-hint bca-att-note"></div>
       </div>
-      <div class="bca-setting bca-att-note-setting">
-        <div class="bca-setting-label bca-att-note-label"></div>
-        <textarea class="bca-att-note-editor" spellcheck="false" style="width:100%;min-height:90px;font:inherit;padding:8px;border-radius:8px;border:1px solid #c9d1da;box-sizing:border-box;"></textarea>
-        <div class="bca-editor-bar">
-          <span class="bca-att-note-msg"></span>
-          <button type="button" class="bca-btn bca-att-note-save"></button>
-        </div>
-      </div>
       <div class="bca-setting">
         <div class="bca-setting-label bca-att-editor-label"></div>
         <textarea class="bca-editor" spellcheck="false" wrap="off"></textarea>
@@ -1112,46 +1111,6 @@
     const copyLink = pane.querySelector(".bca-copy-link");
     copyLink.textContent = s.attCopyLink;
 
-    // --- shared note editor (same access as the page: admin + selected) ---
-    const noteTa = pane.querySelector(".bca-att-note-editor");
-    const noteMsgTa = pane.querySelector(".bca-att-note-msg");
-    const noteSaveTa = pane.querySelector(".bca-att-note-save");
-    noteSaveTa.textContent = s.attNoteSave;
-    pane.querySelector(".bca-att-note-label").textContent = s.attNoteLabel;
-    const loadNote = async () => {
-      try {
-        const res = await fetch("/api/chat/attendance-note", { credentials: "same-origin" });
-        if (res.ok) {
-          const j = await res.json().catch(() => null);
-          if (j && typeof j.note === "string") noteTa.value = j.note;
-        }
-      } catch { /* transient */ }
-    };
-    loadNote();
-    noteSaveTa.addEventListener("click", async () => {
-      try {
-        noteSaveTa.disabled = true;
-        const res = await fetch("/api/chat/attendance-note", {
-          method: "PUT",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ note: noteTa.value }),
-        });
-        const j = await res.json().catch(() => null);
-        if (res.ok) {
-          noteMsgTa.textContent = s.saved;
-          noteTa.value = j && typeof j.note === "string" ? j.note : noteTa.value;
-        } else {
-          noteMsgTa.textContent = s.fetchFail;
-        }
-      } catch {
-        noteMsgTa.textContent = s.fetchFail;
-      } finally {
-        noteSaveTa.disabled = false;
-        setTimeout(() => { noteMsgTa.textContent = ""; }, 2500);
-      }
-    });
-
     const saveBtn = pane.querySelector(".bca-att-save");
     saveBtn.textContent = s.attSave;
     const defBtn = pane.querySelector(".bca-att-default");
@@ -1171,6 +1130,21 @@
 
     const picker = userPicker(s.pickerAttendanceTitle, s.pickerPlaceholder, features.attendanceSelected || []);
     pane.querySelector(".bca-picker-slot").appendChild(picker.el);
+
+    // the selected list lives behind the admin API — load it so the picker
+    // shows the CURRENTLY saved users when the panel opens (owner report:
+    // ticks vanished after reopening). Also re-syncs the mode radio.
+    (async () => {
+      try {
+        const res = await fetch("/api/chat/admin-settings", { credentials: "same-origin" });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (!data) return;
+        if (Array.isArray(data.attendanceSelected) && data.attendanceSelected.length)
+          picker.setValues(data.attendanceSelected);
+        if (data.attendanceMode) checkRadio(seg, data.attendanceMode);
+      } catch { /* transient — picker starts empty */ }
+    })();
 
     const paintCount = () => {
       count.textContent = `${editor.value.length.toLocaleString()} / ${limit.toLocaleString()}`;
@@ -1833,7 +1807,7 @@
   const SHIELD_SVG =
     '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-shield-lock" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.338 1.59a61 61 0 0 0-2.837.856.48.48 0 0 0-.328.39c-.554 4.157.726 7.19 2.253 9.188a10.7 10.7 0 0 0 2.287 2.233c.346.244.652.42.893.533q.18.085.293.118a1 1 0 0 0 .101.025 1 1 0 0 0 .1-.025q.114-.034.294-.118c.24-.113.547-.29.893-.533a10.7 10.7 0 0 0 2.287-2.233c1.527-1.997 2.807-5.031 2.253-9.188a.48.48 0 0 0-.328-.39c-.651-.213-1.75-.56-2.837-.855C9.552 1.29 8.531 1.067 8 1.067c-.53 0-1.552.223-2.662.524zM5.072.56C6.157.265 7.31 0 8 0s1.843.265 2.928.56c1.11.3 2.229.655 2.887.87a1.54 1.54 0 0 1 1.044 1.262c.596 4.477-.787 7.795-2.465 9.99a11.8 11.8 0 0 1-2.517 2.453 7 7 0 0 1-1.048.625c-.28.132-.581.24-.829.24s-.548-.108-.829-.24a7 7 0 0 1-1.048-.625 11.8 11.8 0 0 1-2.517-2.453C1.928 10.487.545 7.169 1.141 2.692A1.54 1.54 0 0 1 2.185 1.43 63 63 0 0 1 5.072.56"/><path d="M9.5 6.5a1.5 1.5 0 0 1-1 1.415l.385 1.99a.5.5 0 0 1-.491.595h-.788a.5.5 0 0 1-.49-.595l.384-1.99a1.5 1.5 0 1 1 2-1.415z"/></svg>';
   const ATTENDANCE_SVG =
-    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-clipboard2-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3z"/><path d="M4 1.5a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1ZM10 1.5a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1Z"/><path d="M6.5 0a.5.5 0 0 1 .5.5V1h2V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5ZM4 2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H4Z"/><path d="M10.854 7.854a.5.5 0 0 0-.708-.708L7.5 9.793 6.354 8.646a.5.5 0 1 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0l3-3Z"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-clipboard2-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 0a.5.5 0 0 1 .5.5.5.5 0 0 0 .5.5.5.5 0 0 1 .5.5V2a.5.5 0 0 1-.5.5h-5A.5.5 0 0 1 5 2v-.5a.5.5 0 0 1 .5-.5.5.5 0 0 0 .5-.5.5.5 0 0 1 .5-.5z"/><path d="M3 2.5a.5.5 0 0 1 .5-.5H4a.5.5 0 0 0 0-1h-.5A1.5 1.5 0 0 0 2 2.5v12A1.5 1.5 0 0 0 3.5 16h9a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 12.5 1H12a.5.5 0 0 0 0 1h.5a.5.5 0 0 1 .5.5v12a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5z"/><path d="M10.854 7.854a.5.5 0 0 0-.708-.708L7.5 9.793 6.354 8.646a.5.5 0 1 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0z"/></svg>';
 
   let navBtn = null;
   let adminBtn = null;
@@ -1921,18 +1895,49 @@
     // attendance page is a standalone page, not part of the chat SPA).
     const wantAtt = loggedIn && features.supported && features.canViewAttendance && !!features.hasAttendanceHtml;
     if (wantAtt && !attBtn) {
-      attBtn = document.createElement("a");
+      attBtn = document.createElement("button");
+      attBtn.type = "button";
       attBtn.className = "btn btn-outline-secondary btn-sm icon-button bca-navatt";
-      attBtn.href = "/attendance";
-      attBtn.target = "_blank";
-      attBtn.rel = "noopener";
       attBtn.innerHTML = ATTENDANCE_SVG;
+      attBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleAttLinks();
+      });
     }
     if (!wantAtt && attBtn) { attBtn.remove(); attBtn = null; }
     if (wantAtt && attBtn && attBtn.parentElement !== group) group.appendChild(attBtn);
 
     refreshCopyUi();
   }
+
+  /** attendance hub: a small dropdown under the icon —
+      1) হাজিরা কাউন্টার (/attendance)  2) নোটপ্যাড (/notepad) — both in a new tab */
+  let attLinksOutside = null;
+  let attLinksEscape = null;
+  function removeAttLinks() {
+    root().querySelectorAll(".bca-attlinks").forEach((p) => p.remove());
+    if (attLinksOutside) { document.removeEventListener("click", attLinksOutside, true); attLinksOutside = null; }
+    if (attLinksEscape) { document.removeEventListener("keydown", attLinksEscape, true); attLinksEscape = null; }
+  }
+  function toggleAttLinks() {
+    const existing = root().querySelector(".bca-attlinks");
+    closePopup();
+    if (existing) return; // icon toggles the dropdown
+    const pop = document.createElement("div");
+    pop.className = "bca-popup bca-attlinks";
+    pop.innerHTML =
+      '<a class="bca-attlinks-item" href="/attendance" target="_blank" rel="noopener"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2a.5.5 0 0 0-.5.5v12a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-12a.5.5 0 0 0-.5-.5H12a.5.5 0 0 1 0-1h.5A1.5 1.5 0 0 1 14 2.5v12a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 14.5v-12A1.5 1.5 0 0 1 3.5 1H4a.5.5 0 0 1 0 1z"/><path d="M10 .5a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5.5.5 0 0 1-.5.5.5.5 0 0 0-.5.5V2a.5.5 0 0 0 .5.5h5A.5.5 0 0 0 11 2v-.5a.5.5 0 0 0-.5-.5.5.5 0 0 1-.5-.5"/></svg><span>হাজিরা কাউন্টার</span></a>' +
+      '<a class="bca-attlinks-item" href="/notepad" target="_blank" rel="noopener"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 10.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5m0-2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0-2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0-2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5"/><path d="M3 0h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-1h1v1a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v1H1V2a2 2 0 0 1 2-2"/><path d="M1 5v-.5a.5.5 0 0 1 1 0V5h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0V8h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0v.5h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1z"/></svg><span>নোটপ্যাড</span></a>';
+    root().appendChild(pop);
+    attLinksOutside = (e) => {
+      if (!pop.contains(e.target) && !e.target.closest(".bca-navatt")) removeAttLinks();
+    };
+    attLinksEscape = (e) => { if (e.key === "Escape") removeAttLinks(); };
+    document.addEventListener("click", attLinksOutside, true);
+    document.addEventListener("keydown", attLinksEscape, true);
+  }
+  const teardownHooks = [];
+  teardownHooks.push(removeAttLinks);
 
   /** when the admin hides the online-users list, regular users shouldn't even
       see the users tab / side panel — hide the React-rendered surfaces
@@ -2025,8 +2030,10 @@
     if (navBtn) { navBtn.remove(); navBtn = null; }
     if (adminBtn) { adminBtn.remove(); adminBtn = null; }
     if (attBtn) { attBtn.remove(); attBtn = null; }
+    if (typeof removeAttLinks === "function") removeAttLinks();
     root().querySelectorAll(".bca-fab").forEach((x) => x.remove());
     closePopup();
+    for (const hook of teardownHooks) { try { hook(); } catch { /* noop */ } }
   }
 
   async function evaluateSession() {
@@ -2042,16 +2049,36 @@
     else ensureNavButtons();
     applyUsersPanelVisibility();
   }
+  // the hub (ui-fixes.js) fires "bca:session" on every logged-out→logged-in
+  // flip — the SPA login navigates without a reload, so without this the
+  // buttons stayed hidden until the next manual reload (owner report 2026-11-07)
+  window.addEventListener("bca:session", (e) => {
+    if (e.detail?.loggedIn) evaluateSession();
+    else if (loggedIn) teardown();
+  });
+  // missed-flip self-healing (owner task 2026-11-07: "make me online"-এর পরের
+  // আইকনদুটো লগইনের পরে অটো আসে না, রিফ্রেশে আসে): the flip event can be
+  // missed (tab throttled in the background during login, listener-wiring
+  // race on a slow first paint) — the 1.2 s loop cross-checks the hub:
+  // hub says logged-in but this module is still torn down → evaluate now.
+  // Cheap: no HTTP, just an object read; the .bca-overlay check keeps the
+  // forced-password modal the sole owner of the screen.
+  setInterval(() => {
+    const sess = window.__bcaSession;
+    if (sess?.loggedIn && sess.me && !loggedIn && !document.querySelector(".bca-overlay")) {
+      evaluateSession();
+    }
+  }, 1200);
   // the React app navigates without reloading, so re-check on every route
   // change, re-attach the buttons if React wiped them, follow language flips,
   // and pick up admin setting changes within ~15 seconds
   let lastUrl = location.href;
   let lastLang = curLang();
   let visibilityTick = 0;
-  setInterval(async () => {
+  setInterval(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      evaluateSession();
+      evaluateSession(); // hub-driven (fetchMe reads __bcaSession — no HTTP)
     }
     if (curLang() !== lastLang) {
       lastLang = curLang();
@@ -2061,11 +2088,20 @@
       ensureNavButtons();
       ensureReactionPlus();
       if (++visibilityTick % 12 === 0) {
-        await refreshFeatures();
-        ensureNavButtons();
-        applyUsersPanelVisibility();
+        (async () => {
+          await refreshFeatures();
+          ensureNavButtons();
+          applyUsersPanelVisibility();
+        })();
       }
     }
   }, 1200);
-  evaluateSession();
+  // first evaluation once the hub has produced its first reading
+  const waitForHub = setInterval(() => {
+    if (window.__bcaSession) {
+      clearInterval(waitForHub);
+      evaluateSession();
+    }
+  }, 300);
+  setTimeout(() => clearInterval(waitForHub), 10000);
 })();

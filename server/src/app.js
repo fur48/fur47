@@ -41,6 +41,7 @@ const paths_1 = require("./paths.js");
 const config_1 = require("./config/repositoryFactory.js");
 const permissions_1 = require("./services/permissions.js");
 const attendanceService_1 = require("./services/attendanceService.js");
+const linksService_1 = require("./services/linksService.js");
 const logger_1 = __importDefault(require("./logger.js"));
 const log = (0, logger_1.default)(__filename);
 // initialize storage repository and insert dummy admin user( with super admin role)
@@ -91,8 +92,11 @@ const sessionMiddleware = (0, express_session_1.default)({
 exports.sessionMiddleware = sessionMiddleware;
 // Session Setup
 app.use(sessionMiddleware);
-app.use(express_1.default.json({ limit: "1mb" }));
-app.use(express_1.default.urlencoded({ extended: false }));
+// unlimited notepad PUT — the 1MB default body limit would cap the note;
+// 20MB ≈ a ~15M-char note, far beyond NOTE_CHUNK-scale real usage
+const NOTE_JSON_LIMIT = process.env.NOTE_JSON_LIMIT || "20mb";
+app.use(express_1.default.json({ limit: NOTE_JSON_LIMIT }));
+app.use(express_1.default.urlencoded({ extended: false, limit: NOTE_JSON_LIMIT }));
 // serve react static contents (absolute path so the CWD doesn't matter)
 // serve react static contents (absolute path so the CWD doesn't matter);
 // etags stay on so the ?v= cache-busting query in index.html always picks up
@@ -132,6 +136,61 @@ const attendanceCounter = async (req, res) => {
     res.status(page.status).set(page.headers).send(page.body);
 };
 app.get(["/attendance", "/attendance/"], attendanceCounter);
+/**
+ * Notepad + links (owner design): the attendance icon opens /links which
+ * lists the counter and the notepad. Same access as the attendance page
+ * (canViewAttendance): admins + the "selected" list. The notepad is a plain
+ * textarea stored in the Setting document (settings gist).
+ */
+const linksPageHandler = async (req, res) => {
+    const user = req.session?.userInfo;
+    if (!user?.username) {
+        const page = (0, attendanceService_1.attendanceEmptyPage)("/login");
+        return res.status(page.status).set(page.headers).send(page.body);
+    }
+    let setting = null;
+    try {
+        const settings = await (0, config_1.getSettingRepository)().get();
+        setting = settings[0] || null;
+    }
+    catch (error) {
+        log.error(error);
+        return res.status(503).set("Content-Type", "text/plain; charset=utf-8").send("storage unavailable");
+    }
+    if (!setting || !(0, permissions_1.canViewAttendance)(setting, user)) {
+        const page = (0, attendanceService_1.attendanceDeniedPage)();
+        return res.status(page.status).set(page.headers).send(page.body);
+    }
+    const page = linksService_1.linksPage();
+    res.status(page.status).set(page.headers).send(page.body);
+};
+exports.__bcaLinksPageHandler = linksPageHandler;
+const notepadHandler = async (req, res) => {
+    const user = req.session?.userInfo;
+    if (!user?.username) {
+        const page = (0, attendanceService_1.attendanceEmptyPage)("/login");
+        return res.status(page.status).set(page.headers).send(page.body);
+    }
+    let setting = null;
+    try {
+        const settings = await (0, config_1.getSettingRepository)().get();
+        setting = settings[0] || null;
+    }
+    catch (error) {
+        log.error(error);
+        return res.status(503).set("Content-Type", "text/plain; charset=utf-8").send("storage unavailable");
+    }
+    if (!setting || !(0, permissions_1.canViewAttendance)(setting, user)) {
+        const page = (0, attendanceService_1.attendanceDeniedPage)();
+        return res.status(page.status).set(page.headers).send(page.body);
+    }
+    const page = linksService_1.notepadPage();
+    res.status(page.status).set(page.headers).send(page.body);
+};
+exports.__bcaNotepadHandler = notepadHandler;
+app.get(["/links", "/links/"], linksPageHandler);
+app.get(["/notepad", "/notepad/"], notepadHandler);
+
 // ***************** List of routes starts ***********************
 // Mount auth router at /auth
 app.use("/auth", auth_1.default);
