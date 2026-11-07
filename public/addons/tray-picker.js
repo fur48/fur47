@@ -37,7 +37,7 @@
   "use strict";
   if (window.__bcaTrayPicker) return;
   window.__bcaTrayPicker = true;
-  console.log("[bca] tray-picker v20 loaded"); // visible proof of the running version
+  console.log("[bca] tray-picker v21 loaded"); // visible proof of the running version
 
   let catalogue = null; // { categories: [{id, emojis:[{n, e}]}] }
   let catalogueLoading = null;
@@ -128,7 +128,7 @@
         throw { retryable: true };
       }
       const merged = await res.json().catch(() => null);
-      if (merged && merged.reactions) applyReactionsToDom(item.id, merged.reactions);
+      if (merged && merged.reactions) {} // v21: React paints via broadcast — no hand-paint
       reactQueue.shift();
     } catch (err) {
       const expired = Date.now() - item.firstAt > REACT_QUEUE_MAX_MS;
@@ -171,61 +171,75 @@
     return false;
   }
 
-  // ---------- v20: server reply → immediate DOM application ----------
-  // Mirrors what the app's socket does with 1's ack payload: the server's
-  // authoritative merged reactions are rendered on the bubble right away, so
-  // a click feels instantaneous even before the broadcast frame arrives
-  // (and the later broadcast is idempotent — same data).
-  function applyReactionsToDom(id, reactions) {
-    const bubble = document.getElementById("message-" + id);
-    if (!bubble || !document.contains(bubble)) return;
+  // ---------- v21: instant visibility WITHOUT double painting ----------
+  // v20 painted the ack payload into the DOM by hand. But this server
+  // broadcasts reactedMessage to the SENDER too (io.emit, sender included),
+  // so React re-rendered the same reaction from its own state a moment
+  // later — and a hand-appended node is invisible to React's reconciliation,
+  // so BOTH stayed: the reaction showed twice until a reload (owner report).
+  // 1 never paints by hand either — its ack updates app state and React
+  // renders it. v21 does the same: the ONLY real painter is React via the
+  // broadcast. For instant feedback a marked temporary chip is shown, and a
+  // MutationObserver removes it the moment React's own chip for the same
+  // emoji appears (before paint, so no double is ever visible); a stale
+  // sweep covers the case where the broadcast never arrives.
+  const mineWatch = new MutationObserver((muts) => {
+    for (const m of muts) {
+      const wrap = m.target;
+      wrap.querySelectorAll(".reaction-emoji[data-bca-mine]").forEach((tmp) => {
+        const first = tmp.querySelector("div > div");
+        const mm = first && (first.textContent || "").match(/^([\s\S]+?)\s+\d+$/);
+        const emoji = mm ? mm[1] : null;
+        if (!emoji) return;
+        const real = [...wrap.querySelectorAll(".reaction-emoji")].find((c) => {
+          if (c === tmp || c.dataset.bcaMine) return false;
+          const f = c.querySelector("div > div");
+          const t = f ? f.textContent || "" : "";
+          return t === emoji || t.startsWith(emoji + " ");
+        });
+        if (real) tmp.remove(); // React painted the real one — ours steps aside
+      });
+    }
+  });
+  const watchedWraps = new WeakSet();
+  function ensureWatched(wrap) {
+    if (watchedWraps.has(wrap)) return;
+    watchedWraps.add(wrap);
+    mineWatch.observe(wrap, { childList: true });
+  }
+  function markChipAsOurs(bubble, emoji) {
     const wrap = bubble.querySelector(".reactions");
     if (!wrap) return;
-    const chipOf = new Map();
-    wrap.querySelectorAll(".reaction-emoji").forEach((chip) => {
+    ensureWatched(wrap);
+    // if a real chip for this emoji already exists, nothing to preview
+    for (const chip of wrap.querySelectorAll(".reaction-emoji")) {
       const first = chip.querySelector("div > div");
-      const text = first ? first.textContent || "" : "";
-      const m = text.match(/^([\s\S]+?)\s+(\d+)$/);
-      if (m) chipOf.set(m[1], chip);
-    });
-    for (const [emoji, info] of Object.entries(reactions || {})) {
-      const users = (info && Array.isArray(info.usernames)) ? info.usernames : [];
-      let chip = chipOf.get(emoji);
-      if (!users.length) {
-        if (chip) chip.remove();
-        continue;
-      }
-      if (!chip) {
-        chip = document.createElement("div");
-        const outer = document.createElement("div");
-        const inner = document.createElement("div");
-        inner.addEventListener("click", () => { window.__bcaRestReact?.(bubble, emoji); });
-        const list = document.createElement("div");
-        list.className = "reaction-username-list";
-        chip.appendChild(outer); chip.appendChild(list);
-        outer.appendChild(inner);
-        chip.className = "reaction-emoji";
-        wrap.appendChild(chip);
-        chipOf.set(emoji, chip);
-      }
-      let inner = chip.querySelector("div > div");
-      if (!inner) {
-        const outer = chip.firstElementChild || chip.appendChild(document.createElement("div"));
-        inner = outer.appendChild(document.createElement("div"));
-      }
-      inner.textContent = "";
-      inner.append(emoji, " " + String(users.length));
-      let list = chip.querySelector(".reaction-username-list");
-      if (!list) list = chip.appendChild(Object.assign(document.createElement("div"), { className: "reaction-username-list" }));
-      list.textContent = "";
-      for (const u of users) {
-        const p = document.createElement("p");
-        p.className = "reaction-username";
-        p.textContent = u;
-        list.appendChild(p);
-      }
+      const m = first && (first.textContent || "").match(/^([\s\S]+?)\s+(\d+)$/);
+      if (m && m[1] === emoji && !chip.dataset.bcaMine) return;
     }
+    const chip = document.createElement("div");
+    chip.className = "reaction-emoji";
+    chip.dataset.bcaMine = "1";
+    chip.__bcaMineAt = Date.now();
+    const outer = document.createElement("div");
+    const inner = document.createElement("div");
+    inner.textContent = emoji + " 1";
+    inner.addEventListener("click", () => { chip.remove(); window.__bcaRestReact?.(bubble, emoji); });
+    const list = document.createElement("div");
+    list.className = "reaction-username-list";
+    outer.appendChild(inner);
+    chip.appendChild(outer);
+    chip.appendChild(list);
+    wrap.appendChild(chip);
   }
+  setInterval(() => {
+    // a marked chip older than 6 s means the broadcast never replaced it
+    // (message scrolled away / queue still pending) — drop the preview
+    document.querySelectorAll(".reaction-emoji[data-bca-mine]").forEach((chip) => {
+      if (!chip.__bcaMineAt) chip.__bcaMineAt = Date.now();
+      else if (Date.now() - chip.__bcaMineAt > 6000) chip.remove();
+    });
+  }, 2000);
   function readReactionsFromDom(bubble) {
     const reactions = {};
     bubble.querySelectorAll(".reaction-emoji").forEach((chip) => {
@@ -274,13 +288,13 @@
       reactions[emoji] = { usernames: [] };
     if (!reactions[emoji].usernames.some((u) => u === me.username))
       reactions[emoji].usernames.push(me.username);
-    // PRIMARY + ONLY PATH (v20, owner task "same socket as 1"): POST
+    // PRIMARY + ONLY PATH (v20/v21, owner task "same socket as 1"): POST
     // /api/chat/react — the REST twin INSIDE the app's own server process.
-    // It runs the exact same handleReactMessage as the app's socket event and
-    // broadcasts reactedMessage to the same room; the 200 reply carries the
-    // authoritative merged reactions (like 1's ack) and is applied to the DOM
-    // immediately. Unreachable (server asleep/waking) → silent queue hold
-    // (v16): retried every 2.5 s, up to 2 min — never an error surface.
+    // Same handleReactMessage as the socket event; the reactedMessage
+    // broadcast (sender included) makes React paint the real chip. v21:
+    // while the POST is in flight, a marked preview chip gives the instant
+    // feedback — it steps aside the moment React's own chip appears.
+    markChipAsOurs(bubble, emoji);
     try {
       const ctrl = new AbortController();
       const abortT = setTimeout(() => ctrl.abort(), 4000);
@@ -293,8 +307,10 @@
       });
       clearTimeout(abortT);
       if (res.ok) {
-        const merged = await res.json().catch(() => null);
-        if (merged && merged.reactions) applyReactionsToDom(id, merged.reactions);
+        // v21: NO hand-paint. The server broadcasts reactedMessage to the
+        // sender too; React renders from its own state — same as 1's ack
+        // path. Our preview chip (markChipAsOurs) covers the visual gap
+        // until the broadcast lands, then steps aside automatically.
         return true;
       }
       if (res.status === 401) return false; // logged out — nothing to hold
